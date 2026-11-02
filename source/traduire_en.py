@@ -101,6 +101,7 @@ T = [
     ("  (attendu xx/AD ou 89/A0 : ID faux)", "  (expected xx/AD or 89/A0: bad ID)"),
     ("  (type 28F016)", "  (28F016 type)"),
     ("Sharp", "Sharp"),
+    ("Erreurs relevees jusqu'ici :", "Errors found so far:"),
     ("Hitachi", "Hitachi"),
     ("/2 repondent (", "/2 answer ("),
     ("Detectee : 32 Mbit, ", "Detected: 32 Mbit, "),

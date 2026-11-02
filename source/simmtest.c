@@ -920,6 +920,9 @@ static void vote_alias(int c, u32 a, u32 got, int inv)
 
 static u32 prog_last;
 
+/* affichage en direct pendant un test long (bilan par puce) */
+static void (*live_cb)(void);
+
 static void progress(const char *what, u32 done, u32 total)
 {
 	u32 p = percent(done, total);
@@ -931,6 +934,8 @@ static void progress(const char *what, u32 done, u32 total)
 	puts_(" : ");
 	putdec(p);
 	puts_(" %");
+	if (live_cb)
+		live_cb();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1504,7 +1509,7 @@ static void verdict_line(int s, int c, int y)
 			t[0] = '1';
 		puts_(t);
 	}
-	if (r->nvote)
+	if (r->nvote >= 8)
 		for (k = 0; k < 21; k++)
 			if (r->avote[k] * 2 > r->nvote) {
 				puts_(" A");
@@ -2144,6 +2149,17 @@ static int confirm_erase(int s)
 	}
 }
 
+static int live_s;
+
+static void live_write(void)
+{
+	int c;
+	for (c = 0; c < test_chips(live_s); c++) {
+		clear_line(5 + c);
+		verdict_line(live_s, c, 5 + c);
+	}
+}
+
 static void screen_write(void)
 {
 	int s = choose_slot("Test ecriture/lecture (EFFACE la SIMM)", 3, 0);
@@ -2162,6 +2178,10 @@ static void screen_write(void)
 		res[c].id_bad = !id.ok[c];
 	}
 	prog_last = 999;
+	print_at(1, 4, C_GREY, "Erreurs relevees jusqu'ici :");
+	live_s = s;
+	live_cb = live_write;
+	live_write();
 	print_at(2, 18, C_WHITE, "1/6 effacement");
 	if (slot_is_gfx(s)) g_erase(s); else p_erase(s);
 	print_at(2, 18, C_WHITE, "2/6 controle effacement");
@@ -2177,6 +2197,7 @@ static void screen_write(void)
 	if (slot_is_gfx(s)) g_verify(s, 2, "Lecture"); else p_verify(s, 2, "Lecture");
 	print_at(2, 18, C_WHITE, "effacement final        ");
 	if (slot_is_gfx(s)) g_erase(s); else p_erase(s);
+	live_cb = 0;
 	for (c = 0; c < 8; c++)
 		if (res[c].nvote < 8)
 			res[c].nvote = 0;
@@ -2221,7 +2242,7 @@ int main(void)
 		print_at(1, 19, C_GREY, "Les numeros de puce .0 a .7 suivent les");
 		print_at(1, 20, C_GREY, "fichiers MAME (ex. sfiii3-simm3.5).");
 		pal_fixes += clear_check(PALRAM, 2 * 0x17e00, 0);
-		print_at(1, 25, C_GREY, "v10 - " __DATE__);
+		print_at(1, 25, C_GREY, "v11 - " __DATE__);
 		k = pad_wait();
 		if (k & B_UP)
 			sel = (sel + 3) & 3;

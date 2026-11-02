@@ -147,6 +147,10 @@ This test needs a confirmation with button 3. It then runs these steps:
 5. Erase, write the inverse pattern, and read it back.
 6. Erase again.
 
+While the test runs, the per-chip summary (error count, wrong data bits,
+suspect address lines) is shown and updated live, so a failing chip shows
+up before the six steps are over.
+
 Every bit of every byte is thus tested at both 0 and 1. A failing erase or
 program operation is detected through the chip's own status bits: DQ6
 toggle, and DQ5 for a timeout.
@@ -356,6 +360,7 @@ writes to the text layer.
 | v8 | Reads back and rewrites the palette and sprite RAM until they are cleared. **Clean black background on real hardware** |
 | v9 | Recognises 32 Mbit graphics SIMMs (chips `.0` and `.1` only) and tests only the fitted chips |
 | v10 | Supports Intel/Sharp-type 28F016 chips (e.g. Hitachi HN98F1600): identification, read tests and write test |
+| v11 | The write test shows the per-chip error summary live, during the six steps |
 
 ---
 
