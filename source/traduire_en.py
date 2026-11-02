@@ -96,6 +96,10 @@ T = [
     ("Non detectee : aucune puce ne repond", "Not detected: no chip answers"),
     ("Detectee : ", "Detected: "),
     (" puces repondent (", " chips answer ("),
+    ("32 Mbit, ", "32 Mbit, "),
+    ("/2 repondent (", "/2 answer ("),
+    ("Detectee : 32 Mbit, ", "Detected: 32 Mbit, "),
+    ("SIMM 32 Mbit : .2 a .7 absentes, non testees.", "32 Mbit SIMM: .2 to .7 not fitted, not tested."),
 ]
 
 def main():

@@ -621,6 +621,56 @@ static int id_valid(u32 m, u32 d)
 	return d == 0xad && m != 0xff && m != 0x00;
 }
 
+/* SIMM graphique 32 Mbit (4 Mo) : seules les puces .0 et .1 sont montees.
+   Reconnue quand .0 ou .1 repond et que les positions .2 a .7 lisent
+   toutes le meme code (bus vide : FF/FF en general), different de celui
+   de .0 et .1 s'il ressemble a une reponse. Une puce .0 ou .1 en panne
+   ne fait donc pas prendre la SIMM pour une 64/128 Mbit. Les tests ne
+   portent alors que sur la paire 0. */
+static int npairs;               /* paires testees (SIMM graphique), voir set_npairs */
+
+static int answers(u32 m, u32 d)
+{
+	return !(m == 0xff && d == 0xff) && !(m == 0 && d == 0);
+}
+
+static int is_32mbit(int s, const struct ident *id)
+{
+	int c;
+	u32 m = id->manuf[2], d = id->dev[2];
+	if (!slot_is_gfx(s))
+		return 0;
+	if (!answers(id->manuf[0], id->dev[0]) && !answers(id->manuf[1], id->dev[1]))
+		return 0;
+	for (c = 3; c < 8; c++)
+		if (id->manuf[c] != m || id->dev[c] != d)
+			return 0;
+	if (answers(m, d))
+		for (c = 0; c < 2; c++)
+			if (id->manuf[c] == m && id->dev[c] == d)
+				return 0;
+	return 1;
+}
+
+/* puces testees dans le slot */
+static int test_chips(int s)
+{
+	if (!npairs)
+		npairs = 4;
+	return slot_is_gfx(s) ? 2 * npairs : 4;
+}
+
+static void set_npairs(int s, const struct ident *id)
+{
+	npairs = is_32mbit(s, id) ? 1 : 4;
+}
+
+static void note_32mbit(int s, int y)
+{
+	if (slot_is_gfx(s) && npairs == 1)
+		print_at(1, y, C_CYAN, "SIMM 32 Mbit : .2 a .7 absentes, non testees.");
+}
+
 static void identify(int s, struct ident *id)
 {
 	int c;
@@ -869,11 +919,18 @@ static void screen_ident(void)
 			y++;
 			continue;
 		}
-		color(ok == n ? C_GREEN : C_ORANGE);
-		putdec(ok);
-		puts_("/");
-		putdec(n);
-		puts_(" repondent (");
+		if (is_32mbit(s, &id)) {
+			color(ok == 2 ? C_GREEN : C_ORANGE);
+			puts_("32 Mbit, ");
+			putdec(ok);
+			puts_("/2 repondent (");
+		} else {
+			color(ok == n ? C_GREEN : C_ORANGE);
+			putdec(ok);
+			puts_("/");
+			putdec(n);
+			puts_(" repondent (");
+		}
 		puts_(manuf_name(id.manuf[0]));
 		puts_(")");
 		y++;
@@ -929,9 +986,16 @@ static int choose_slot(const char *question, int def, int need_type)
 				}
 			clear_line(12);
 			at(4, 12);
-			if (ok == 0) {
+			if (ok == 0 && !is_32mbit(s, &id)) {
 				color(C_RED);
 				puts_("Non detectee : aucune puce ne repond");
+			} else if (is_32mbit(s, &id)) {
+				color(ok == 2 ? C_GREEN : C_ORANGE);
+				puts_("Detectee : 32 Mbit, ");
+				putdec(ok);
+				puts_("/2 repondent (");
+				puts_(manuf_name(id.manuf[0]));
+				puts_(")");
 			} else {
 				color(ok == n ? C_GREEN : C_ORANGE);
 				puts_("Detectee : ");
@@ -998,11 +1062,11 @@ static void crc_scan(int s)
 		}
 	} else {
 		int p;
-		for (p = 0; p < 4; p++) {
+		for (p = 0; p < npairs; p++) {
 			int c0 = 2 * p, c1 = 2 * p + 1;
 			for (w = 0; w < CHIP_SIZE / 2; w += BLK) {
 				u32 *d = (u32 *)NC(dma_buf);
-				progress("Lecture", p * (CHIP_SIZE / 2) + w, 2 * CHIP_SIZE);
+				progress("Lecture", p * (CHIP_SIZE / 2) + w, npairs * (CHIP_SIZE / 2));
 				read_block(s, p, w, dma_buf);
 				for (i = 0; i < BLK; i++) {
 					u32 v = d[i];
@@ -1050,7 +1114,7 @@ static u32 read_byte(int s, int c, u32 a)
 /* lignes d'adresse qui semblent sans effet : a et a^(1<<k) toujours egaux */
 static void alias_scan(int s)
 {
-	int c, k, n = slot_chips(s);
+	int c, k, n = test_chips(s);
 	for (c = 0; c < n; c++) {
 		for (k = 0; k < 21; k++) {
 			u32 i, valid = 0, same = 0;
@@ -1096,10 +1160,11 @@ static void screen_crc(void)
 	u32 gamelen = 0;
 	if (!s)
 		return;
-	n = slot_chips(s);
 	title("Controle du contenu - lecture en cours");
 	res_clear();
 	identify(s, &id);
+	set_npairs(s, &id);
+	n = test_chips(s);
 	prog_last = 999;
 	crc_scan(s);
 	progress("Analyse des lignes d'adresse", 0, 1);
@@ -1217,6 +1282,7 @@ static void screen_crc(void)
 		if (y > 23)
 			break;
 	}
+	note_32mbit(s, 23);
 	at(1, 24);
 	if (nknown == n) {
 		color(C_GREEN);
@@ -1369,7 +1435,7 @@ static void verdict_line(int s, int c, int y)
 
 static void results_screens(int s, const char *what)
 {
-	int n = slot_chips(s), page = -1, c;
+	int n = test_chips(s), page = -1, c;
 	for (;;) {
 		u32 k;
 		if (page < 0) {
@@ -1398,6 +1464,7 @@ static void results_screens(int s, const char *what)
 			print_at(1, 19, C_GREY, " 1  lu 1 au lieu de 0    x  les deux");
 			print_at(1, 20, C_GREY, "Ax : ligne d'adresse suspecte");
 			print_at(1, 21, C_GREY, "muette : ne repond pas / plus");
+			note_32mbit(s, 23);
 			print_at(1, 24, C_GREY, "Droite/gauche : detail par puce");
 		} else {
 			show_chip_detail(s, page);
@@ -1436,13 +1503,14 @@ static void screen_compare(void)
 			 slot_is_gfx(s) ? (s == 3 ? 4 : 3) : (s == 1 ? 2 : 1), s);
 	if (!rs || rs == s)
 		return;
-	n = slot_chips(s);
 	title("Comparaison en cours");
 	res_clear();
 	{
 		struct ident id;
 		int c;
 		identify(s, &id);
+		set_npairs(s, &id);
+		n = test_chips(s);
 		for (c = 0; c < n; c++) {
 			res[c].id_m = id.manuf[c];
 			res[c].id_d = id.dev[c];
@@ -1472,10 +1540,10 @@ static void screen_compare(void)
 		}
 	} else {
 		int p;
-		for (p = 0; p < 4; p++)
+		for (p = 0; p < npairs; p++)
 			for (w = 0; w < CHIP_SIZE / 2; w += BLK) {
 				u32 *t = (u32 *)NC(dma_buf), *r = (u32 *)NC(cmp_buf);
-				progress("Comparaison", p * (CHIP_SIZE / 2) + w, 2 * CHIP_SIZE);
+				progress("Comparaison", p * (CHIP_SIZE / 2) + w, npairs * (CHIP_SIZE / 2));
 				read_block(s, p, w, dma_buf);
 				read_block(rs, p, w, cmp_buf);
 				for (i = 0; i < BLK; i++) {
@@ -1711,8 +1779,8 @@ static void g_erase(int s)
 {
 	int p;
 	sec_on();
-	/* lance l'effacement des 4 paires, puis attend chacune */
-	for (p = 0; p < 4; p++) {
+	/* lance l'effacement des paires, puis attend chacune */
+	for (p = 0; p < npairs; p++) {
 		g_cmd_we(s, p, 0xf0f0);
 		gfx_bank(s, p, 0);
 		we_on();
@@ -1722,7 +1790,7 @@ static void g_erase(int s)
 		R16(GFXWIN + 0x2aa * 4 + 2) = 0x1010;
 		we_off();
 	}
-	for (p = 0; p < 4; p++) {
+	for (p = 0; p < npairs; p++) {
 		u32 fail;
 		gfx_bank(s, p, 0);
 		fail = g_wait(0, 0, 0x3, T_ERASE);
@@ -1741,7 +1809,7 @@ static void g_program(int s, int inv, const char *what)
 	int p;
 	u32 a;
 	sec_on();
-	for (p = 0; p < 4; p++) {
+	for (p = 0; p < npairs; p++) {
 		int c0 = 2 * p, c1 = 2 * p + 1;
 		for (a = 0; a < CHIP_SIZE; a++) {
 			/* a = adresse dans chaque puce de la paire */
@@ -1751,7 +1819,7 @@ static void g_program(int s, int inv, const char *what)
 			u32 d1 = pat(c1, a) ^ (inv ? 0xff : 0);
 			u32 lm, fail;
 			if ((a & 0x3fff) == 0) {
-				progress(what, p * CHIP_SIZE + a, 4 * CHIP_SIZE);
+				progress(what, p * CHIP_SIZE + a, npairs * CHIP_SIZE);
 				if (abort_requested())
 					goto out;
 			}
@@ -1799,11 +1867,11 @@ static void g_verify(int s, int mode, const char *what)
 {
 	int p;
 	u32 w, i;
-	for (p = 0; p < 4; p++) {
+	for (p = 0; p < npairs; p++) {
 		int c0 = 2 * p, c1 = 2 * p + 1;
 		for (w = 0; w < CHIP_SIZE / 2; w += BLK) {
 			u32 *d = (u32 *)NC(dma_buf);
-			progress(what, p * (CHIP_SIZE / 2) + w, 2 * CHIP_SIZE);
+			progress(what, p * (CHIP_SIZE / 2) + w, npairs * (CHIP_SIZE / 2));
 			read_block(s, p, w, dma_buf);
 			for (i = 0; i < BLK; i++) {
 				u32 a = (w + i) * 2, v = d[i], l;
@@ -1857,6 +1925,7 @@ static void screen_write(void)
 	res_clear();
 	memset(fails_in_row, 0, sizeof(fails_in_row));
 	identify(s, &id);
+	set_npairs(s, &id);
 	for (c = 0; c < slot_chips(s); c++) {
 		res[c].id_m = id.manuf[c];
 		res[c].id_d = id.dev[c];
@@ -1922,7 +1991,7 @@ int main(void)
 		print_at(1, 19, C_GREY, "Les numeros de puce .0 a .7 suivent les");
 		print_at(1, 20, C_GREY, "fichiers MAME (ex. sfiii3-simm3.5).");
 		pal_fixes += clear_check(PALRAM, 2 * 0x17e00, 0);
-		print_at(1, 25, C_GREY, "v8 - " __DATE__);
+		print_at(1, 25, C_GREY, "v9 - " __DATE__);
 		k = pad_wait();
 		if (k & B_UP)
 			sel = (sel + 3) & 3;

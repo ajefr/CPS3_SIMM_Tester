@@ -79,6 +79,12 @@ answer the identification command, and their manufacturer.
 
 ![Slot selection](docs/slot_detection.png)
 
+A graphics SIMM is recognised as a **32 Mbit SIMM** when chip `.0` or `.1`
+answers and positions `.2` to `.7` all read the same empty-bus value. Tests
+2, 3 and 4 then cover only chips `.0` and `.1`, so positions that are not
+fitted are not reported as faulty. A failing `.0` or `.1` chip does not
+prevent this detection.
+
 ### 1. Chip identification (fast, read-only)
 
 The BIOS sends the standard *autoselect* command (90h) to every chip of
@@ -92,7 +98,8 @@ every slot and shows the manufacturer and device code of each one.
   supply, a broken CE or WE line, or a bad solder joint.
 - A wrong ID such as `04/A5` often means a data bit is stuck. In that
   example, D3 of the device code reads 0.
-- 32 Mbit SIMMs only have chips `.0` and `.1` fitted.
+- 32 Mbit (4 MB) graphics SIMMs, such as the ones holding sound data,
+  only have chips `.0` and `.1` fitted. The BIOS shows them as `32 Mbit`.
 
 ### 2. Content check: CRC32 per chip (read-only, about 20 s per graphics SIMM)
 
@@ -333,6 +340,7 @@ writes to the text layer.
 | v6 | Own boot code: the BIOS no longer contains any Capcom code. Slot selection shows whether a SIMM is detected |
 | v7 | Waits after power-up before clearing the video memories |
 | v8 | Reads back and rewrites the palette and sprite RAM until they are cleared. **Clean black background on real hardware** |
+| v9 | Recognises 32 Mbit graphics SIMMs (chips `.0` and `.1` only) and tests only the fitted chips |
 
 ---
 
