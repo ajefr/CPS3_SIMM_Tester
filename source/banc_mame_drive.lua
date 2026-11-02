@@ -63,6 +63,27 @@ for f in faults:gmatch("[^,]+") do
 	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x" }
 	if kind == "g" then gf[#gf + 1] = e else pf[#pf + 1] = e end
 end
+-- INTEL=<slot> : simule des puces type Intel 28F016 (ID 89/A0) dans une
+-- SIMM graphique : 9090 -> mode ID, FFFF -> lecture ; en mode ID les
+-- lectures de la paire rendent 89/A0 (lecture du contenu inchangee).
+local isl = tonumber(os.getenv("INTEL") or "0")
+local imode = {}
+if isl >= 3 then
+	taps[#taps + 1] = prog:install_write_tap(0x04200000, 0x043fffff, "iw", function(off, data, mask)
+		local s = 3 + bank // 8
+		if s ~= isl then return end
+		local pair = (bank % 8) // 2
+		local v = (mask & 0xffff0000 ~= 0) and ((data >> 16) & 0xffff) or (data & 0xffff)
+		if v == 0x9090 then imode[pair] = "id" elseif v == 0xffff then imode[pair] = nil end
+	end)
+	taps[#taps + 1] = prog:install_read_tap(0x04200000, 0x043fffff, "ir", function(off, data, mask)
+		local s = 3 + bank // 8
+		if s ~= isl then return data end
+		local pair = (bank % 8) // 2
+		if imode[pair] == "id" then return 0x8989a0a0 end
+		return data
+	end)
+end
 if #gf > 0 then
 	taps[#taps + 1] = prog:install_read_tap(0x04200000, 0x043fffff, "gfault", function(off, data, mask)
 		if guard then return data end

@@ -146,10 +146,16 @@ m_start: .long	_start
 
 /* Constantes lues par DMA (donc jamais dechiffrees) : laissees en clair
    dans l'image. 0x1FF00 : configuration de la puce de securite ;
-   0x1FF0C : encadrement des acces flash ; 0x1FF1C : commandes flash. */
+   0x1FF0C : encadrement des acces flash ; 0x1FF1C : commandes flash (AMD/Fujitsu), 0x1FF40 : commandes Intel. */
 	.section .boot.consts,"a"
 	.long	0x03000004, 0xb6010038, 0xe0000000
 	.long	0x01050003, 0x01050000, 0x00000001, 0x00000000
 	.long	0xaaaaaaaa, 0x55555555, 0xf0f0f0f0, 0x90909090
 	.long	0xa0a0a0a0, 0x80808080, 0x10101010, 0x09090909
 	.long	0x0e0e0e0e
+	/* 0x1FF40 : commandes des puces type Intel/Sharp 28F016 (et Hitachi)
+	   0x1FF44 FF lecture, 0x1FF54 50 effacer l'etat, 0x1FF58 40 ecrire,
+	   0x1FF5C 70 etat, 0x1FF60/64 A7 D0 effacement total, 0x1FF68 71 */
+	.long	0x0a0a0a0a, 0xffffffff, 0x82828212, 0x04040404
+	.long	0x0b0b0b0b, 0x50505050, 0x40404040, 0x70707070
+	.long	0xa7a7a7a7, 0xd0d0d0d0, 0x71717171

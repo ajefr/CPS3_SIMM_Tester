@@ -40,6 +40,16 @@ typedef int s32;
 #define K_A0       0x1ff2c
 #define K_80       0x1ff30
 #define K_10       0x1ff34
+/* puces type Intel/Sharp 28F016 (ex. Hitachi HN98F1600), comme le BIOS
+   d'origine : ID 89/A0 (Intel) ou B0/88 (Sharp) */
+#define K_I90      0x1ff28
+#define K_IFF      0x1ff44
+#define K_I50      0x1ff54
+#define K_I40      0x1ff58
+#define K_I70      0x1ff5c
+#define K_IA7      0x1ff60
+#define K_ID0      0x1ff64
+#define K_I71      0x1ff68
 
 #define SEC_CTRL   0x27ff000c
 #define SEC_WE     0x27ff0048
@@ -614,11 +624,20 @@ struct ident {
 	u8 manuf[8];
 	u8 dev[8];
 	u8 ok[8];
+	u8 intel;        /* puces type Intel/Sharp (commandes 28F016) */
 };
+
+/* jeu de commandes de la SIMM en cours de test (voir set_npairs) */
+static int intel;
+
+static int intel_id(u32 m, u32 d)
+{
+	return (m == 0x89 && d == 0xa0) || (m == 0xb0 && d == 0x88);
+}
 
 static int id_valid(u32 m, u32 d)
 {
-	return d == 0xad && m != 0xff && m != 0x00;
+	return (d == 0xad && m != 0xff && m != 0x00) || intel_id(m, d);
 }
 
 /* SIMM graphique 32 Mbit (4 Mo) : seules les puces .0 et .1 sont montees.
@@ -663,12 +682,63 @@ static int test_chips(int s)
 static void set_npairs(int s, const struct ident *id)
 {
 	npairs = is_32mbit(s, id) ? 1 : 4;
+	intel = id->intel;
 }
 
 static void note_32mbit(int s, int y)
 {
 	if (slot_is_gfx(s) && npairs == 1)
 		print_at(1, y, C_CYAN, "SIMM 32 Mbit : .2 a .7 absentes, non testees.");
+}
+
+/* identification des puces type Intel/Sharp, comme le BIOS d'origine
+   quand aucune puce ne repond xx/AD : 90 (lecture de l'ID, sans
+   deverrouillage), puis 50 (effacer l'etat) et FF (retour en lecture). */
+static void identify_intel(int s, struct ident *id)
+{
+	struct ident t;
+	int c, n = 0;
+	memset(&t, 0, sizeof(t));
+	sec_on();
+	if (!slot_is_gfx(s)) {
+		u32 b = prg_base(s), m, d;
+		dma(K_I90, b, 1, 2);
+		m = p_read(b);
+		d = p_read(b + 4);
+		dma(K_I50, b, 1, 2);
+		dma(K_IFF, b, 1, 2);
+		for (c = 0; c < 4; c++) {
+			t.manuf[c] = m >> (24 - 8 * c);
+			t.dev[c] = d >> (24 - 8 * c);
+		}
+	} else {
+		int p;
+		for (p = 0; p < 4; p++) {
+			u32 w;
+			gfx_bank(s, p, 0);
+			we_on();
+			R16(GFXWIN) = 0x9090;
+			we_off();
+			w = R32(GFXWIN);
+			we_on();
+			R16(GFXWIN) = 0x5050;
+			R16(GFXWIN) = 0xffff;
+			we_off();
+			t.manuf[2 * p] = w >> 24;
+			t.manuf[2 * p + 1] = w >> 16;
+			t.dev[2 * p] = w >> 8;
+			t.dev[2 * p + 1] = w;
+		}
+		R16(GFXBANK) = 0;
+	}
+	sec_off();
+	for (c = 0; c < slot_chips(s); c++)
+		n += intel_id(t.manuf[c], t.dev[c]);
+	if (n) {
+		memcpy(id->manuf, t.manuf, 8);
+		memcpy(id->dev, t.dev, 8);
+		id->intel = 1;
+	}
 }
 
 static void identify(int s, struct ident *id)
@@ -703,6 +773,13 @@ static void identify(int s, struct ident *id)
 		R16(GFXBANK) = 0;
 	}
 	sec_off();
+	{
+		int namd = 0;
+		for (c = 0; c < slot_chips(s); c++)
+			namd += (id->dev[c] == 0xad && answers(id->manuf[c], id->dev[c]));
+		if (!namd)
+			identify_intel(s, id);
+	}
 	for (c = 0; c < slot_chips(s); c++)
 		id->ok[c] = id_valid(id->manuf[c], id->dev[c]);
 }
@@ -716,6 +793,8 @@ static const char *manuf_name(u32 m)
 	case 0xc2: return "Macronix";
 	case 0x1f: return "Atmel";
 	case 0x89: return "Intel";
+	case 0xb0: return "Sharp";
+	case 0x07: return "Hitachi";
 	case 0x37: return "AMIC";
 	case 0xad: return "Hyundai";
 	case 0x98: return "Toshiba";
@@ -901,7 +980,7 @@ static void screen_ident(void)
 {
 	int s, c, y = 5;
 	title("Identification des puces (commande 90h)");
-	print_at(1, 4, C_GREY, "fabricant/composant, 29F016 = xx/AD");
+	print_at(1, 4, C_GREY, "29F016 : xx/AD   28F016 : 89/A0 ou B0/88");
 	for (s = 1; s <= 7; s++) {
 		struct ident id;
 		int n = slot_chips(s), ok = 0;
@@ -1321,7 +1400,8 @@ static void show_chip_detail(int s, int c)
 	puthex(r->id_m, 2);
 	puts_("/");
 	puthex(r->id_d, 2);
-	puts_(r->id_bad ? "  (attendu xx/AD : ID faux)" : "  (29F016)");
+	puts_(r->id_bad ? "  (attendu xx/AD ou 89/A0 : ID faux)" :
+	      intel_id(r->id_m, r->id_d) ? "  (type 28F016)" : "  (29F016)");
 	at(1, 5);
 	if (r->dead) {
 		color(C_RED);
@@ -1652,11 +1732,56 @@ static u32 p_wait(u32 addr, u32 mask, u32 limit)
 	return fail;
 }
 
+/* puces Intel/Sharp : attend le bit 7 (automate pret) des puces 'mask' */
+static u32 pi_wait(u32 addr, u32 mask, u32 limit)
+{
+	u32 t0 = ticks();
+	for (;;) {
+		u32 v = p_read(addr), c;
+		for (c = 0; c < 4; c++)
+			if ((mask & (1u << c)) && (p_lane(v, c) & 0x80))
+				mask &= ~(1u << c);
+		if (!mask || ticks() - t0 > limit)
+			return mask;
+	}
+}
+
+/* effacement total des puces Intel/Sharp, comme le BIOS d'origine :
+   etat etendu (71), attente de la file libre, A7 D0, attente du bit 7
+   de l'etat global, puis 50 et FF. Erreur = bit 5 de l'etat (70). */
+static u32 pi_erase(u32 b)
+{
+	u32 t0 = ticks(), fail, v, c;
+	dma(K_I71, b, 1, 2);
+	while ((p_read(b + 16) & 0x08080808) == 0x08080808 && ticks() - t0 < MS(1000))
+		;
+	dma(K_IA7, b, 1, 2);
+	dma(K_ID0, b, 1, 2);
+	dma(K_I71, b, 1, 2);
+	fail = pi_wait(b + 16, 0xf, T_ERASE);
+	dma(K_I70, b, 1, 2);
+	v = p_read(b);
+	for (c = 0; c < 4; c++)
+		if (p_lane(v, c) & 0x20)
+			fail |= 1u << c;
+	dma(K_I50, b, 1, 2);
+	dma(K_IFF, b, 1, 2);
+	return fail;
+}
+
 static void p_erase(int s)
 {
 	u32 b = prg_base(s), fail;
 	int c;
 	sec_on();
+	if (intel) {
+		fail = pi_erase(b);
+		sec_off();
+		for (c = 0; c < 4; c++)
+			if (fail & (1u << c))
+				res[c].erase_fail = 1;
+		return;
+	}
 	p_cmd(b, K_F0);
 	p_cmd(b, K_80);
 	p_cmd(b, K_10);
@@ -1691,9 +1816,24 @@ static void p_program(int s, int inv, const char *what)
 		}
 		if (!mask)
 			continue;
-		p_cmd(b, K_A0);
-		p_write(b + a * 4, v);
-		fail = p_wait(b + a * 4, mask, T_PROG);
+		if (intel) {
+			/* 40 + donnee, etat (70), bit 7, erreur = bit 4, 50 FF */
+			u32 st;
+			dma(K_I40, b + a * 4, 1, 2);
+			p_write(b + a * 4, v);
+			dma(K_I70, b + a * 4, 1, 2);
+			fail = pi_wait(b + a * 4, mask, T_PROG);
+			st = p_read(b + a * 4);
+			for (c = 0; c < 4; c++)
+				if ((mask & (1u << c)) && (p_lane(st, c) & 0x10))
+					fail |= 1u << c;
+			dma(K_I50, b + a * 4, 1, 2);
+			dma(K_IFF, b + a * 4, 1, 2);
+		} else {
+			p_cmd(b, K_A0);
+			p_write(b + a * 4, v);
+			fail = p_wait(b + a * 4, mask, T_PROG);
+		}
 		for (c = 0; c < 4; c++) {
 			if (fail & (1u << c)) {
 				res[c].timeouts++;
@@ -1703,7 +1843,8 @@ static void p_program(int s, int inv, const char *what)
 				fails_in_row[c] = 0;
 			}
 		}
-		p_cmd(b, K_F0);    /* comme le BIOS d'origine apres chaque mot */
+		if (!intel)
+			p_cmd(b, K_F0);    /* comme le BIOS d'origine apres chaque mot */
 	}
 	sec_off();
 }
@@ -1775,10 +1916,76 @@ static u32 g_wait(u32 off, u32 odd, u32 mask, u32 limit)
 	return fail;
 }
 
+/* puces Intel/Sharp d'une paire : attend le bit 7 (octet haut = puce
+   paire, octet bas = puce impaire), lecture 16 bits */
+static u32 gi_wait(u32 addr, u32 mask, u32 limit)
+{
+	u32 t0 = ticks();
+	for (;;) {
+		u32 v = R16(addr);
+		if ((mask & 1) && (v & 0x8000))
+			mask &= ~1u;
+		if ((mask & 2) && (v & 0x0080))
+			mask &= ~2u;
+		if (!mask || ticks() - t0 > limit)
+			return mask;
+	}
+}
+
+static void gi_cmd(u32 addr, u16 c)
+{
+	we_on();
+	R16(addr) = c;
+	we_off();
+}
+
+/* effacement total, comme le BIOS d'origine (0xAD94 de sfiii3_euro) */
+static void gi_erase(int s)
+{
+	int p;
+	for (p = 0; p < npairs; p++) {
+		u32 t0 = ticks();
+		gfx_bank(s, p, 0);
+		gi_cmd(GFXWIN, 0x7171);
+		while ((R16(GFXWIN + 8) & 0x0808) == 0x0808 && ticks() - t0 < MS(1000))
+			;
+		we_on();
+		R16(GFXWIN) = 0xa7a7;
+		R16(GFXWIN) = 0xd0d0;
+		we_off();
+	}
+	for (p = 0; p < npairs; p++) {
+		u32 fail, v;
+		gfx_bank(s, p, 0);
+		gi_cmd(GFXWIN, 0x7171);
+		fail = gi_wait(GFXWIN + 8, 3, T_ERASE);
+		gi_cmd(GFXWIN, 0x7070);
+		v = R16(GFXWIN);
+		if (v & 0x2000)
+			fail |= 1;
+		if (v & 0x0020)
+			fail |= 2;
+		we_on();
+		R16(GFXWIN) = 0x5050;
+		R16(GFXWIN) = 0xffff;
+		we_off();
+		if (fail & 1)
+			res[2 * p].erase_fail = 1;
+		if (fail & 2)
+			res[2 * p + 1].erase_fail = 1;
+	}
+	R16(GFXBANK) = 0;
+}
+
 static void g_erase(int s)
 {
 	int p;
 	sec_on();
+	if (intel) {
+		gi_erase(s);
+		sec_off();
+		return;
+	}
 	/* lance l'effacement des paires, puis attend chacune */
 	for (p = 0; p < npairs; p++) {
 		g_cmd_we(s, p, 0xf0f0);
@@ -1829,14 +2036,36 @@ static void g_program(int s, int inv, const char *what)
 				d1 = 0xff;
 			if (d0 == 0xff && d1 == 0xff)
 				continue;
-			gfx_bank(s, p, 0);
-			we_on();
-			g_cmd(0xa0a0);
-			gfx_bank(s, p, half);
-			R16(GFXWIN + off * 4 + (odd ? 2 : 0)) = (d0 << 8) | d1;
-			we_off();
 			lm = ((d0 != 0xff) ? 1 : 0) | ((d1 != 0xff) ? 2 : 0);
-			fail = g_wait(off, odd, lm, T_PROG);
+			if (intel) {
+				/* comme le BIOS d'origine : 40 + donnee, 70, bit 7,
+				   erreur = bit 4, puis 50 FF */
+				u32 ad = GFXWIN + off * 4 + (odd ? 2 : 0), st;
+				gfx_bank(s, p, half);
+				we_on();
+				R16(ad) = 0x4040;
+				R16(ad) = (d0 << 8) | d1;
+				we_off();
+				gi_cmd(ad, 0x7070);
+				fail = gi_wait(ad, lm, T_PROG);
+				st = R16(ad);
+				if ((lm & 1) && (st & 0x1000))
+					fail |= 1;
+				if ((lm & 2) && (st & 0x0010))
+					fail |= 2;
+				we_on();
+				R16(ad) = 0x5050;
+				R16(ad) = 0xffff;
+				we_off();
+			} else {
+				gfx_bank(s, p, 0);
+				we_on();
+				g_cmd(0xa0a0);
+				gfx_bank(s, p, half);
+				R16(GFXWIN + off * 4 + (odd ? 2 : 0)) = (d0 << 8) | d1;
+				we_off();
+				fail = g_wait(off, odd, lm, T_PROG);
+			}
 			if (fail) {
 				if (fail & 1) {
 					res[c0].timeouts++;
@@ -1855,7 +2084,8 @@ static void g_program(int s, int inv, const char *what)
 					fails_in_row[c1] = 0;
 			}
 			/* comme le BIOS d'origine apres chaque ecriture */
-			g_cmd_we(s, p, 0xf0f0);
+			if (!intel)
+				g_cmd_we(s, p, 0xf0f0);
 		}
 	}
 out:
@@ -1991,7 +2221,7 @@ int main(void)
 		print_at(1, 19, C_GREY, "Les numeros de puce .0 a .7 suivent les");
 		print_at(1, 20, C_GREY, "fichiers MAME (ex. sfiii3-simm3.5).");
 		pal_fixes += clear_check(PALRAM, 2 * 0x17e00, 0);
-		print_at(1, 25, C_GREY, "v9 - " __DATE__);
+		print_at(1, 25, C_GREY, "v10 - " __DATE__);
 		k = pad_wait();
 		if (k & B_UP)
 			sel = (sel + 3) & 3;

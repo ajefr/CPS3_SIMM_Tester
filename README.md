@@ -94,6 +94,10 @@ every slot and shows the manufacturer and device code of each one.
 
 - A healthy 29F016 answers `xx/AD`. The first byte is the manufacturer:
   `04` Fujitsu, `01` AMD, `20` ST, `C2` Macronix, and so on.
+- Some SIMMs use Intel/Sharp-type 28F016 chips instead, such as the Hitachi
+  HN98F1600. They answer `89/A0` (Intel) or `B0/88` (Sharp). Like the
+  original BIOS, this BIOS tries the Intel identification command when no
+  chip answers `xx/AD`, and then uses the Intel command set for that SIMM.
 - `FF/FF` means the chip does not answer. Look for a dead chip, a missing
   supply, a broken CE or WE line, or a bad solder joint.
 - A wrong ID such as `04/A5` often means a data bit is stuck. In that
@@ -221,7 +225,7 @@ MAME and checked against the original, write by write:
    video memories.
 
 The cache routine and the code are encrypted like any cartridge BIOS. The
-constants read by DMA (`0x1FF00–0x1FF3F`) stay raw, as in the original.
+constants read by DMA (`0x1FF00–0x1FF6B`) stay raw, as in the original.
 
 The flash access sequences were recorded with MAME from the original
 `sfiii3_euro` BIOS while it reflashed the SIMMs from the *3rd Strike* CD.
@@ -241,6 +245,13 @@ They are reproduced exactly:
   32-bit read hits each chip twice, so DQ6 never seems to toggle.
 - **Completion.** The end of an operation is detected with the DQ6 toggle
   bit, and a timeout with DQ5.
+- **Intel/Sharp-type chips (28F016).** The sequences come from the original
+  BIOS: `90` to read the ID, `50` then `FF` to clear the status and return
+  to read mode, `A7`/`D0` to erase the whole chip, with the extended status
+  `71` polled for readiness, and `40` + data to program, then status `70`
+  (bit 7 = ready, bit 4 = program error, bit 5 = erase error). On program
+  SIMMs these command words are sent by DMA from raw constants at
+  `0x1FF40–0x1FF6B`, like the original.
 - **Display.** Text uses the CPS3 text layer (the "SS" layer), with a
   public-domain 8×8 font.
 
@@ -265,7 +276,7 @@ in French.
 | File | Role |
 |---|---|
 | `simmtest.c` | The test program |
-| `boot.S` | Boot code: cache routine, bus setup, security chip DMA, raw DMA constants |
+| `boot.S` | Boot code: cache routine, bus setup, security chip DMA, raw DMA constants (`0x1FF00–0x1FF6B`) |
 | `hw_tab.h` | I/O and video register writes done at boot |
 | `crt0.S`, `link.ld` | C runtime startup and link script |
 | `link_capcom.ld` | Only for the optional `--base` mode, which reuses the boot of a BIOS dump you provide |
@@ -324,6 +335,9 @@ writes to the text layer.
   - the fault reports.
 
   Reports from real faulty SIMMs are welcome.
+- Intel/Sharp-type chips: MAME does not emulate them on CPS3. Their
+  detection was checked in MAME with simulated chips. Their erase and
+  program sequences follow the original BIOS but have not been run yet.
 - A graphics SIMM is read in pairs of chips. A fault shared by a pair, such
   as the bank select or a shared line, shows on both chips.
 - The address line number is the one seen by the chip. This assumes that
@@ -341,6 +355,7 @@ writes to the text layer.
 | v7 | Waits after power-up before clearing the video memories |
 | v8 | Reads back and rewrites the palette and sprite RAM until they are cleared. **Clean black background on real hardware** |
 | v9 | Recognises 32 Mbit graphics SIMMs (chips `.0` and `.1` only) and tests only the fitted chips |
+| v10 | Supports Intel/Sharp-type 28F016 chips (e.g. Hitachi HN98F1600): identification, read tests and write test |
 
 ---
 

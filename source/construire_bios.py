@@ -41,7 +41,7 @@ BIOS_SIZE = 0x80000
 CACHE_CODE = (0x510, 0x544)     # copie en 0xC0000000 au boot
 CACHE_INSN_END = 0x532          # instructions jusqu'a 0x531 ; ensuite pool de constantes
                                 # (les lectures de donnees dans le cache ne sont pas dechiffrees)
-RAW_KEEP = (0x1FF00, 0x1FF40)   # lu par DMA : octets bruts
+RAW_KEEP = (0x1FF00, 0x1FF6C)   # lu par DMA : octets bruts
 ENTRY_LITERAL = 0x4C8           # adresse du programme principal (rts du boot)
 EXC_VECTORS = (4, 6, 9, 10)     # instr. illegale, slot illegal, erreurs d'adresse
 CODE_BASE = 0x2000
