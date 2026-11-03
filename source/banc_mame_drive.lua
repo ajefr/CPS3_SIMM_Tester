@@ -52,7 +52,7 @@ local taps = {}
 taps[#taps + 1] = prog:install_write_tap(0x040c0088, 0x040c008b, "bank", function(off, data, mask)
 	if mask & 0xffff0000 ~= 0 then bank = ((data >> 16) & 0xffff) - 2 end
 end)
--- gfx : "g<simm>.<puce>:d<bit>=<0|1>" ou "g<simm>.<puce>:a<k>"
+-- gfx : "g<simm>.<puce>:d<bit>=<0|1>", "g<simm>.<puce>:a<k>" ou "g<simm>.<puce>:b<paire>" (conflit de bus)
 -- prog : "p<simm>.<puce>:d<bit>=<0|1>"
 local gf, pf = {}, {}
 for f in faults:gmatch("[^,]+") do
@@ -60,7 +60,8 @@ for f in faults:gmatch("[^,]+") do
 	s = tonumber(s); c = tonumber(c)
 	local b, v = rest:match("^d(%d)=(%d)$")
 	local a = rest:match("^a(%d+)$")
-	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x" }
+	local bq = rest:match("^b(%d)$")
+	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x", bus = bq and tonumber(bq) }
 	if kind == "g" then gf[#gf + 1] = e else pf[#pf + 1] = e end
 end
 -- INTEL=<slot> : simule des puces type Intel 28F016 (ID 89/A0) dans une
@@ -92,7 +93,17 @@ if #gf > 0 then
 		for _, e in ipairs(gf) do
 			if e.s == s and e.c // 2 == pair then
 				local lanes = (e.c % 2 == 1) and 0x00ff00ff or 0xff00ff00
-				if e.dead then
+				if e.bus then
+					-- conflit de bus : la paire e.bus repond aussi (ET des donnees)
+					local oldb = bank
+					local half = bank % 2
+					guard = true
+					prog:write_u16(0x040c0088, (s - 3) * 8 + e.bus * 2 + half + 2)
+					local o = prog:read_u32(off)
+					prog:write_u16(0x040c0088, oldb + 2)
+					guard = false
+					data = (data & ~lanes) | (data & o & lanes)
+				elseif e.dead then
 					data = data | lanes
 				elseif e.bit then
 					local m = 0

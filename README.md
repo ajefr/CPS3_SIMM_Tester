@@ -180,6 +180,7 @@ Each chip gets one line:
 | `N err` | Number of wrong bytes (out of 2,097,152 per chip) |
 | `D7..0:` | One character per data bit of the chip, D7 on the left: `.` good, `0` read 0 instead of 1, `1` read 1 instead of 0, `x` both |
 | `A12` | Suspect address line, as seen by the chip. The byte read is the one at the neighbouring address that differs only by this bit |
+| `bus.1` | Graphics SIMMs, tests 3 and 4: **bus conflict**. All pairs share the data lines (`.0 .2 .4 .6` on one side, `.1 .3 .5 .7` on the other). The wrong bytes match the content of chip `.1`, or the AND of both chips, so chip `.1` is enabled at the same time. Check the pair select (CE, decoding, solder joints) rather than the failing chip |
 
 Press right/left to open the **detail page** of each chip:
 
@@ -193,6 +194,7 @@ Press right/left to open the **detail page** of each chip:
 | D5 of chip .2 stuck at 1 | `.2 BAD … D7..0:..1.....` |
 | A12 of chip .2 open | `.2 BAD … D7..0:xxxxxxxx A12` |
 | Chip .7 not answering | Identification `FF/FF`, then `.7 BAD ID? … D7..0:11111111` |
+| Chip .1 enabled together with chip .5 | `.5 BAD … D7..0:00000000 bus.1` |
 
 ## 6. Chip numbering
 
@@ -361,6 +363,7 @@ writes to the text layer.
 | v9 | Recognises 32 Mbit graphics SIMMs (chips `.0` and `.1` only) and tests only the fitted chips |
 | v10 | Supports Intel/Sharp-type 28F016 chips (e.g. Hitachi HN98F1600): identification, read tests and write test |
 | v11 | The write test shows the per-chip error summary live, during the six steps |
+| v12 | Detects bus conflicts between pairs of a graphics SIMM (`bus.n`) |
 
 ---
 
