@@ -80,7 +80,8 @@ answer the identification command, and their manufacturer.
 ![Slot selection](docs/slot_detection.png)
 
 A graphics SIMM is recognised as a **32 Mbit SIMM** when chip `.0` or `.1`
-answers and positions `.2` to `.7` all read the same empty-bus value. Tests
+answers and none of positions `.2` to `.7` returns a valid chip ID, like
+the original BIOS (an empty position can read any floating value). Tests
 2, 3 and 4 then cover only chips `.0` and `.1`, so positions that are not
 fitted are not reported as faulty. A failing `.0` or `.1` chip does not
 prevent this detection.
@@ -371,6 +372,7 @@ writes to the text layer.
 | v12 | Detects bus conflicts between pairs of a graphics SIMM (`bus.n`) |
 | v13 | Compares each error with the data of every other chip, bit by bit: `bus.n` (chip enabled too) or `x.n` (crossed or bridged data line). The write-test pattern now differs between chips at every address |
 | v14 | Reliable end-of-erase wait: a chip that is slow to erase is no longer checked while still busy (false errors at step 2, read values like `18`/`5C`). No more "suspect address lines" heading with an empty list |
+| v15 | 32 Mbit graphics SIMMs are recognised even when the empty positions read floating values, so the tests no longer run on `.2` to `.7`. The menu shows the right version number |
 
 ---
 

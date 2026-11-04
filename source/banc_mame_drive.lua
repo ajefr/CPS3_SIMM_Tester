@@ -64,7 +64,7 @@ for f in faults:gmatch("[^,]+") do
 	-- "c<q>" : donnees de la puce q pontees (ET) sur celles de c ; "c<q>d<bit>" : un seul bit
 	local cq, cb = rest:match("^c(%d)d(%d)$")
 	if not cq then cq = rest:match("^c(%d)$") end
-	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x", bus = bq and tonumber(bq), cross = cq and tonumber(cq), cbit = cb and tonumber(cb) }
+	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x", float = rest == "f", bus = bq and tonumber(bq), cross = cq and tonumber(cq), cbit = cb and tonumber(cb) }
 	if kind == "g" then gf[#gf + 1] = e else pf[#pf + 1] = e end
 end
 -- INTEL=<slot> : simule des puces type Intel 28F016 (ID 89/A0) dans une
@@ -160,6 +160,9 @@ if #gf > 0 then
 					data = (data & ~lanes) | (data & o & lanes)
 				elseif e.dead then
 					data = data | lanes
+				elseif e.float then
+					-- position vide, bus flottant : valeur quelconque
+					data = (data & ~lanes) | (math.random(0, 0xffffffff) & lanes)
 				elseif e.bit then
 					local m = 0
 					for sh = 0, 24, 8 do

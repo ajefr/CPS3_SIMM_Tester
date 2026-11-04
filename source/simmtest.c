@@ -641,11 +641,9 @@ static int id_valid(u32 m, u32 d)
 }
 
 /* SIMM graphique 32 Mbit (4 Mo) : seules les puces .0 et .1 sont montees.
-   Reconnue quand .0 ou .1 repond et que les positions .2 a .7 lisent
-   toutes le meme code (bus vide : FF/FF en general), different de celui
-   de .0 et .1 s'il ressemble a une reponse. Une puce .0 ou .1 en panne
-   ne fait donc pas prendre la SIMM pour une 64/128 Mbit. Les tests ne
-   portent alors que sur la paire 0. */
+   Comme le BIOS d'origine : .0 ou .1 repond, et aucune position .2 a .7
+   ne rend un code de puce valide (bus vide : FF, valeur flottante...).
+   Les tests ne portent alors que sur la paire 0. */
 static int npairs;               /* paires testees (SIMM graphique), voir set_npairs */
 
 static int answers(u32 m, u32 d)
@@ -656,18 +654,13 @@ static int answers(u32 m, u32 d)
 static int is_32mbit(int s, const struct ident *id)
 {
 	int c;
-	u32 m = id->manuf[2], d = id->dev[2];
 	if (!slot_is_gfx(s))
 		return 0;
 	if (!answers(id->manuf[0], id->dev[0]) && !answers(id->manuf[1], id->dev[1]))
 		return 0;
-	for (c = 3; c < 8; c++)
-		if (id->manuf[c] != m || id->dev[c] != d)
+	for (c = 2; c < 8; c++)
+		if (id_valid(id->manuf[c], id->dev[c]))
 			return 0;
-	if (answers(m, d))
-		for (c = 0; c < 2; c++)
-			if (id->manuf[c] == m && id->dev[c] == d)
-				return 0;
 	return 1;
 }
 
@@ -2388,7 +2381,7 @@ int main(void)
 		print_at(1, 19, C_GREY, "Les numeros de puce .0 a .7 suivent les");
 		print_at(1, 20, C_GREY, "fichiers MAME (ex. sfiii3-simm3.5).");
 		pal_fixes += clear_check(PALRAM, 2 * 0x17e00, 0);
-		print_at(1, 25, C_GREY, "v13 - " __DATE__);
+		print_at(1, 25, C_GREY, "v15 - " __DATE__);
 		k = pad_wait();
 		if (k & B_UP)
 			sel = (sel + 3) & 3;
