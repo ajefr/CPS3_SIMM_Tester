@@ -61,7 +61,10 @@ for f in faults:gmatch("[^,]+") do
 	local b, v = rest:match("^d(%d)=(%d)$")
 	local a = rest:match("^a(%d+)$")
 	local bq = rest:match("^b(%d)$")
-	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x", bus = bq and tonumber(bq) }
+	-- "c<q>" : donnees de la puce q pontees (ET) sur celles de c ; "c<q>d<bit>" : un seul bit
+	local cq, cb = rest:match("^c(%d)d(%d)$")
+	if not cq then cq = rest:match("^c(%d)$") end
+	local e = { s = s, c = c, bit = b and tonumber(b), val = v and tonumber(v), a = a and tonumber(a), dead = rest == "x", bus = bq and tonumber(bq), cross = cq and tonumber(cq), cbit = cb and tonumber(cb) }
 	if kind == "g" then gf[#gf + 1] = e else pf[#pf + 1] = e end
 end
 -- INTEL=<slot> : simule des puces type Intel 28F016 (ID 89/A0) dans une
@@ -93,7 +96,19 @@ if #gf > 0 then
 		for _, e in ipairs(gf) do
 			if e.s == s and e.c // 2 == pair then
 				local lanes = (e.c % 2 == 1) and 0x00ff00ff or 0xff00ff00
-				if e.bus then
+				if e.cross then
+					-- meme paire : rang c&1 vs q&1 sur le mot lu
+					local m = e.cbit and (1 << e.cbit) or 0xff
+					local mm = (m << 24) | (m << 8)      -- octets de la puce paire
+					if e.c % 2 == 1 then
+						-- puce impaire : prend les octets de la puce paire (decales de 8)
+						local src = (data >> 8) & ((m << 16) | m)
+						data = data & ~(((m << 16) | m) & ~src)
+					else
+						local src = (data << 8) & mm
+						data = data & ~(mm & ~src)
+					end
+				elseif e.bus then
 					-- conflit de bus : la paire e.bus repond aussi (ET des donnees)
 					local oldb = bank
 					local half = bank % 2
@@ -132,8 +147,15 @@ if #pf > 0 then
 		local s = off >= 0x06800000 and 2 or 1
 		for _, e in ipairs(pf) do
 			if e.s == s then
-				local m = (1 << e.bit) << (24 - 8 * e.c)
-				if e.val == 0 then data = data & ~m else data = data | m end
+				if e.cross then
+					local m = e.cbit and (1 << e.cbit) or 0xff
+					local src = (data >> (24 - 8 * e.cross)) & m
+					local lm = m << (24 - 8 * e.c)
+					data = data & ~(lm & ~(src << (24 - 8 * e.c)))
+				else
+					local m = (1 << e.bit) << (24 - 8 * e.c)
+					if e.val == 0 then data = data & ~m else data = data | m end
+				end
 			end
 		end
 		return data

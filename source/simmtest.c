@@ -854,8 +854,8 @@ struct res {
 	u8 alias[21];    /* lecture seule : ligne d'adresse suspecte */
 	u8 erase_fail;
 	u8 id_m, id_d, id_bad;
-	u32 bvote[4];    /* SIMM graphique : la valeur fausse s'explique par la */
-	u32 nbvote;      /* puce de meme rang de la paire q lue en meme temps */
+	u32 bvote[8];    /* les bits faux valent ceux de la puce q (vote_bus) */
+	u32 nbvote;
 };
 
 static struct res res[8];
@@ -894,11 +894,15 @@ static void note_error(int c, u32 a, u32 exp, u32 got)
 /* ------------------------------------------------------------------ */
 /* Motif de test : depend de tous les bits d'adresse                    */
 
+/* le numero de puce entre dans le hachage : entre deux puces, la
+   difference des motifs change a chaque adresse (necessaire pour
+   reconnaitre les donnees d'une autre puce, voir vote_bus) */
 static u32 pat(int c, u32 a)
 {
-	u32 x = a ^ (a >> 11) ^ (a >> 17);
+	u32 x = a ^ ((u32)c << 21);
+	x ^= (x >> 11) ^ (x >> 17);
 	x *= 0x9e3779b1;
-	return ((x >> 24) ^ (c * 0x3b) ^ (a >> 5)) & 0xff;
+	return ((x >> 24) ^ (x >> 13) ^ (a >> 5)) & 0xff;
 }
 
 static void vote_alias(int c, u32 a, u32 got, int inv)
@@ -917,39 +921,51 @@ static void vote_alias(int c, u32 a, u32 got, int inv)
 	}
 }
 
-/* Conflit de bus (SIMM graphique) : toutes les paires partagent les memes
-   lignes de donnees (.0 .2 .4 .6 d'un cote, .1 .3 .5 .7 de l'autre). Si
-   une puce d'une autre paire s'active en meme temps que la paire testee,
-   l'octet lu vaut celui de cette puce, ou le ET des deux (le 0 l'emporte).
-   oth = octet que la puce de rang c&1 de la paire q contient a cette
-   adresse. */
-static void vote_bus(int c, u32 exp, u32 got, const u32 *oth)
+/* Donnees d'une autre puce. Toutes les paires d'une SIMM graphique
+   partagent les lignes de donnees (.0 .2 .4 .6 d'un cote, .1 .3 .5 .7 de
+   l'autre) : si une puce d'une autre paire s'active en meme temps, l'octet
+   lu vaut le sien, ou le ET des deux. Une ligne de donnees croisee ou
+   pontee avec celle d'une autre puce donne le meme symptome, bit par bit.
+   Regle : chaque bit faux vaut le bit de meme rang de la puce q a la meme
+   adresse. oth[q] = octet de la puce q (motif ou SIMM de reference). Les
+   octets 00 et FF ne disent rien (zones vides) et sont ignores. */
+static void vote_bus(int c, u32 exp, u32 got, const u32 *oth, int n)
 {
 	struct res *r = &res[c];
-	int q;
-	if (r->nbvote >= 512)
+	u32 d = got ^ exp;
+	int q, any = 0;
+	if (r->nbvote >= 512 || !d)
 		return;
-	r->nbvote++;
-	for (q = 0; q < npairs; q++) {
-		if (q == c / 2 || oth[q] == exp)
+	for (q = 0; q < n; q++) {
+		if (q == c || oth[q] == 0xff || oth[q] == 0x00)
 			continue;
-		if (got == oth[q] || got == (exp & oth[q]))
+		any = 1;
+		if (!((got ^ oth[q]) & d))
 			r->bvote[q]++;
 	}
+	if (any)
+		r->nbvote++;
 }
 
-/* paire en conflit probable avec la puce c, ou -1 */
+/* puce dont les donnees se retrouvent sur la puce c, ou -1 */
 static int bus_suspect(int c)
 {
 	struct res *r = &res[c];
 	int q, best = -1;
-	if (r->nbvote < 8)
+	if (r->nbvote < 32)
 		return -1;
-	for (q = 0; q < 4; q++)
+	for (q = 0; q < 8; q++)
 		if (r->bvote[q] * 4 > r->nbvote * 3 &&
 		    (best < 0 || r->bvote[q] > r->bvote[best]))
 			best = q;
 	return best;
+}
+
+/* conflit de selection (meme lignes de donnees, autre paire) plutot que
+   lignes croisees ? */
+static int bus_is_select(int s, int c, int q)
+{
+	return slot_is_gfx(s) && (q & 1) == (c & 1) && q / 2 != c / 2;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1507,12 +1523,19 @@ static void show_chip_detail(int s, int c)
 				puts_(" ");
 			}
 	}
-	if (slot_is_gfx(s) && bus_suspect(c) >= 0) {
+	k = bus_suspect(c);
+	if (k >= 0) {
 		at(1, y++);
 		color(C_ORANGE);
-		puts_("Conflit de bus : .");
-		putdec(2 * bus_suspect(c) + (c & 1));
-		puts_(" repond aussi (CE ?)");
+		if (bus_is_select(s, c, k)) {
+			puts_("Conflit de bus : .");
+			putdec(k);
+			puts_(" repond aussi (CE ?)");
+		} else {
+			puts_("Donnees de .");
+			putdec(k);
+			puts_(" melangees : ligne croisee/pont");
+		}
 	}
 }
 
@@ -1562,9 +1585,10 @@ static void verdict_line(int s, int c, int y)
 				puts_(" A");
 				putdec(k);
 			}
-	if (slot_is_gfx(s) && bus_suspect(c) >= 0) {
-		puts_(" bus.");
-		putdec(2 * bus_suspect(c) + (c & 1));
+	k = bus_suspect(c);
+	if (k >= 0) {
+		puts_(bus_is_select(s, c, k) ? " bus." : " x.");
+		putdec(k);
 	}
 }
 
@@ -1599,8 +1623,9 @@ static void results_screens(int s, const char *what)
 			print_at(1, 19, C_GREY, " 1  lu 1 au lieu de 0    x  les deux");
 			print_at(1, 20, C_GREY, "Ax : ligne d'adresse suspecte");
 			print_at(1, 21, C_GREY, "muette : ne repond pas / plus");
-			if (slot_is_gfx(s))
-				print_at(1, 22, C_GREY, "bus.n : la puce .n repond en meme temps");
+			print_at(1, 22, C_GREY, slot_is_gfx(s) ?
+				 "bus.n : .n active aussi  x.n : ligne croisee" :
+				 "x.n : donnees de .n (ligne croisee/pont)");
 			note_32mbit(s, 23);
 			print_at(1, 24, C_GREY, "Droite/gauche : detail par puce");
 		} else {
@@ -1629,16 +1654,14 @@ static void compare_chip_bytes(int s, int ref, int c, u32 a, u32 got, u32 exp)
 		note_error(c, a, exp, got);
 }
 
-/* comparaison : contenu des autres paires pris sur la SIMM de reference */
+/* comparaison : contenu des autres puces pris sur la SIMM de reference */
 static void cmp_bus_vote(int s, int rs, int c, u32 a, u32 exp, u32 got)
 {
-	u32 oth[4];
-	int q;
-	if (!slot_is_gfx(s))
-		return;
-	for (q = 0; q < 4; q++)
-		oth[q] = q < npairs ? read_byte(rs, 2 * q + (c & 1), a) : exp;
-	vote_bus(c, exp, got, oth);
+	u32 oth[8];
+	int q, n = test_chips(s);
+	for (q = 0; q < n; q++)
+		oth[q] = q == c ? exp : read_byte(rs, q, a);
+	vote_bus(c, exp, got, oth, n);
 }
 
 static void screen_compare(void)
@@ -1937,7 +1960,15 @@ static void p_verify(int s, int mode, const char *what)
 				if (got != exp) {
 					note_error(c, a, exp, got);
 					if (mode)
+					{
+						u32 oth[4], q;
 						vote_alias(c, a, got, mode == 2);
+						if (res[c].nbvote < 512) {
+							for (q = 0; q < 4; q++)
+								oth[q] = pat(q, a) ^ (mode == 2 ? 0xff : 0);
+							vote_bus(c, exp, got, oth, 4);
+						}
+					}
 				}
 			}
 		}
@@ -2184,11 +2215,13 @@ static void g_verify(int s, int mode, const char *what)
 					if (got != exp) {
 						note_error(c, aa, exp, got);
 						if (mode) {
-							u32 oth[4], q;
+							u32 oth[8], q;
 							vote_alias(c, aa, got, mode == 2);
-							for (q = 0; q < 4; q++)
-								oth[q] = pat(2 * q + (c & 1), aa) ^ (mode == 2 ? 0xff : 0);
-							vote_bus(c, exp, got, oth);
+							if (res[c].nbvote < 512) {
+								for (q = 0; q < (u32)(2 * npairs); q++)
+									oth[q] = pat(q, aa) ^ (mode == 2 ? 0xff : 0);
+								vote_bus(c, exp, got, oth, 2 * npairs);
+							}
 						}
 					}
 				}
@@ -2313,7 +2346,7 @@ int main(void)
 		print_at(1, 19, C_GREY, "Les numeros de puce .0 a .7 suivent les");
 		print_at(1, 20, C_GREY, "fichiers MAME (ex. sfiii3-simm3.5).");
 		pal_fixes += clear_check(PALRAM, 2 * 0x17e00, 0);
-		print_at(1, 25, C_GREY, "v12 - " __DATE__);
+		print_at(1, 25, C_GREY, "v13 - " __DATE__);
 		k = pad_wait();
 		if (k & B_UP)
 			sel = (sel + 3) & 3;
