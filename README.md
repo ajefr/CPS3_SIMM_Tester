@@ -252,7 +252,10 @@ They are reproduced exactly:
   `(simm-3)*8 + pair*2 + half + 2`. Status polling uses **16-bit reads**: a
   32-bit read hits each chip twice, so DQ6 never seems to toggle.
 - **Completion.** The end of an operation is detected with the DQ6 toggle
-  bit, and a timeout with DQ5.
+  bit, and a timeout with DQ5. After an erase, DQ6 must stay still for 2048
+  reads in a row (one quiet read is not enough: a slow chip was seen
+  reported done while still busy), then, like the original BIOS, the first
+  word must read back `FF` before the check starts.
 - **Intel/Sharp-type chips (28F016).** The sequences come from the original
   BIOS: `90` to read the ID, `50` then `FF` to clear the status and return
   to read mode, `A7`/`D0` to erase the whole chip, with the extended status
@@ -367,6 +370,7 @@ writes to the text layer.
 | v11 | The write test shows the per-chip error summary live, during the six steps |
 | v12 | Detects bus conflicts between pairs of a graphics SIMM (`bus.n`) |
 | v13 | Compares each error with the data of every other chip, bit by bit: `bus.n` (chip enabled too) or `x.n` (crossed or bridged data line). The write-test pattern now differs between chips at every address |
+| v14 | Reliable end-of-erase wait: a chip that is slow to erase is no longer checked while still busy (false errors at step 2, read values like `18`/`5C`). No more "suspect address lines" heading with an empty list |
 
 ---
 

@@ -1510,7 +1510,7 @@ static void show_chip_detail(int s, int c)
 		putdec(r->bit1[b]);
 	}
 	for (k = 0, b = 0; k < 21; k++)
-		if (r->nvote && r->avote[k] * 2 > r->nvote)
+		if (r->nvote >= 8 && r->avote[k] * 2 > r->nvote)
 			b = 1;
 	if (b) {
 		at(1, y++);
@@ -1781,6 +1781,14 @@ static void screen_compare(void)
 
 #define T_PROG  MS(5)        /* programmation d'un octet : max ~300 us */
 #define T_ERASE MS(150000)   /* effacement complet : 29F016 jusqu'a ~100 s */
+#define T_BLANK MS(3000)     /* puis attente de la relecture a FF */
+
+/* Fin d'operation : nombre de lectures de suite sans bascule de DQ6.
+   Une seule paire de lectures identiques ne suffit pas : sur vraie carte,
+   une puce lente a l'effacement a ete vue declaree finie alors qu'elle
+   rendait encore son etat (18/5C : D7 = 0, D6 et D2 qui basculent). */
+#define W_PROG  4
+#define W_ERASE 2048
 
 static int fails_in_row[8];
 
@@ -1796,10 +1804,11 @@ static u32 p_lane(u32 v, int c) { return (v >> (24 - 8 * c)) & 0xff; }
    travaille, DQ6 change a chaque lecture. Une puce dont DQ6 ne bascule plus
    a termine (le resultat est controle a la relecture complete). DQ5 = 1
    pendant la bascule = delai interne depasse. Retourne les puces en echec. */
-static u32 p_wait(u32 addr, u32 mask, u32 limit)
+static u32 p_wait(u32 addr, u32 mask, u32 limit, u32 need)
 {
 	u32 t0 = ticks(), fail = 0;
 	u32 v1 = p_read(addr);
+	u32 st[4] = { 0, 0, 0, 0 };
 	for (;;) {
 		u32 v2 = p_read(addr), c;
 		for (c = 0; c < 4; c++) {
@@ -1807,8 +1816,9 @@ static u32 p_wait(u32 addr, u32 mask, u32 limit)
 			if (!(mask & m))
 				continue;
 			if (!((p_lane(v1, c) ^ p_lane(v2, c)) & 0x40)) {
-				mask &= ~m;
-			} else if (p_lane(v2, c) & 0x20) {
+				if (++st[c] >= need)
+					mask &= ~m;
+			} else if (st[c] = 0, p_lane(v2, c) & 0x20) {
 				u32 a = p_read(addr), b = p_read(addr);
 				if ((p_lane(a, c) ^ p_lane(b, c)) & 0x40)
 					fail |= m;
@@ -1840,6 +1850,17 @@ static u32 pi_wait(u32 addr, u32 mask, u32 limit)
 	}
 }
 
+/* comme le BIOS d'origine : apres l'effacement, attend que le premier mot
+   relise FF (une puce qui travaille encore rend son octet d'etat, D7 = 0).
+   Delai court : une puce dont un bit reste a 0 sera signalee par la
+   relecture. */
+static void p_blank(u32 b)
+{
+	u32 t0 = ticks();
+	while (p_read(b) != 0xffffffff && ticks() - t0 < T_BLANK)
+		;
+}
+
 /* effacement total des puces Intel/Sharp, comme le BIOS d'origine :
    etat etendu (71), attente de la file libre, A7 D0, attente du bit 7
    de l'etat global, puis 50 et FF. Erreur = bit 5 de l'etat (70). */
@@ -1852,6 +1873,7 @@ static u32 pi_erase(u32 b)
 	dma(K_IA7, b, 1, 2);
 	dma(K_ID0, b, 1, 2);
 	dma(K_I71, b, 1, 2);
+	idle_ms(5);
 	fail = pi_wait(b + 16, 0xf, T_ERASE);
 	dma(K_I70, b, 1, 2);
 	v = p_read(b);
@@ -1860,6 +1882,7 @@ static u32 pi_erase(u32 b)
 			fail |= 1u << c;
 	dma(K_I50, b, 1, 2);
 	dma(K_IFF, b, 1, 2);
+	p_blank(b);
 	return fail;
 }
 
@@ -1879,8 +1902,10 @@ static void p_erase(int s)
 	p_cmd(b, K_F0);
 	p_cmd(b, K_80);
 	p_cmd(b, K_10);
-	fail = p_wait(b, 0xf, T_ERASE);
+	idle_ms(5);
+	fail = p_wait(b, 0xf, T_ERASE, W_ERASE);
 	p_cmd(b, K_F0);
+	p_blank(b);
 	sec_off();
 	for (c = 0; c < 4; c++)
 		if (fail & (1u << c))
@@ -1926,7 +1951,7 @@ static void p_program(int s, int inv, const char *what)
 		} else {
 			p_cmd(b, K_A0);
 			p_write(b + a * 4, v);
-			fail = p_wait(b + a * 4, mask, T_PROG);
+			fail = p_wait(b + a * 4, mask, T_PROG, W_PROG);
 		}
 		for (c = 0; c < 4; c++) {
 			if (fail & (1u << c)) {
@@ -1985,11 +2010,12 @@ static u32 g_lane(u32 v, int lane) { return (v >> (24 - 8 * lane)) & 0xff; }
 /* comme le BIOS d'origine, lecture 16 bits : un seul acces par puce
    (une lecture 32 bits lit deux fois chaque puce et DQ6 semblerait fixe).
    octet haut = puce paire, octet bas = puce impaire ; mask bit0/bit1. */
-static u32 g_wait(u32 off, u32 odd, u32 mask, u32 limit)
+static u32 g_wait(u32 off, u32 odd, u32 mask, u32 limit, u32 need)
 {
 	u32 t0 = ticks(), fail = 0;
 	u32 addr = GFXWIN + off * 4 + (odd ? 2 : 0);
 	u32 v1 = R16(addr);
+	u32 st[2] = { 0, 0 };
 	for (;;) {
 		u32 v2 = R16(addr), l;
 		for (l = 0; l < 2; l++) {
@@ -1998,8 +2024,9 @@ static u32 g_wait(u32 off, u32 odd, u32 mask, u32 limit)
 			if (!(mask & m))
 				continue;
 			if (!((x1 ^ x2) & 0x40)) {
-				mask &= ~m;
-			} else if (x2 & 0x20) {
+				if (++st[l] >= need)
+					mask &= ~m;
+			} else if (st[l] = 0, x2 & 0x20) {
 				u32 a = R16(addr), b = R16(addr);
 				u32 y1 = l ? a & 0xff : a >> 8, y2 = l ? b & 0xff : b >> 8;
 				if ((y1 ^ y2) & 0x40)
@@ -2041,6 +2068,16 @@ static void gi_cmd(u32 addr, u16 c)
 	we_off();
 }
 
+/* comme le BIOS d'origine : attend que la paire relise FFFF (voir p_blank) */
+static void g_blank(int s, int p)
+{
+	u32 t0 = ticks();
+	gfx_bank(s, p, 0);
+	while ((R16(GFXWIN) != 0xffff || R16(GFXWIN + 2) != 0xffff) &&
+	       ticks() - t0 < T_BLANK)
+		;
+}
+
 /* effacement total, comme le BIOS d'origine (0xAD94 de sfiii3_euro) */
 static void gi_erase(int s)
 {
@@ -2060,6 +2097,8 @@ static void gi_erase(int s)
 		u32 fail, v;
 		gfx_bank(s, p, 0);
 		gi_cmd(GFXWIN, 0x7171);
+		if (p == 0)
+			idle_ms(5);
 		fail = gi_wait(GFXWIN + 8, 3, T_ERASE);
 		gi_cmd(GFXWIN, 0x7070);
 		v = R16(GFXWIN);
@@ -2071,6 +2110,7 @@ static void gi_erase(int s)
 		R16(GFXWIN) = 0x5050;
 		R16(GFXWIN) = 0xffff;
 		we_off();
+		g_blank(s, p);
 		if (fail & 1)
 			res[2 * p].erase_fail = 1;
 		if (fail & 2)
@@ -2099,15 +2139,17 @@ static void g_erase(int s)
 		R16(GFXWIN + 0x2aa * 4 + 2) = 0x1010;
 		we_off();
 	}
+	idle_ms(5);
 	for (p = 0; p < npairs; p++) {
 		u32 fail;
 		gfx_bank(s, p, 0);
-		fail = g_wait(0, 0, 0x3, T_ERASE);
+		fail = g_wait(0, 0, 0x3, T_ERASE, W_ERASE);
 		if (fail & 1)
 			res[2 * p].erase_fail = 1;
 		if (fail & 2)
 			res[2 * p + 1].erase_fail = 1;
 		g_cmd_we(s, p, 0xf0f0);
+		g_blank(s, p);
 	}
 	R16(GFXBANK) = 0;
 	sec_off();
@@ -2166,7 +2208,7 @@ static void g_program(int s, int inv, const char *what)
 				gfx_bank(s, p, half);
 				R16(GFXWIN + off * 4 + (odd ? 2 : 0)) = (d0 << 8) | d1;
 				we_off();
-				fail = g_wait(off, odd, lm, T_PROG);
+				fail = g_wait(off, odd, lm, T_PROG, W_PROG);
 			}
 			if (fail) {
 				if (fail & 1) {

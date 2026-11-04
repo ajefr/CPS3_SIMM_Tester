@@ -88,6 +88,46 @@ if isl >= 3 then
 		return data
 	end)
 end
+-- "g<simm>.<puce>:e<N>" : puce lente a l'effacement. Apres la commande 1010,
+-- la puce rend son etat (D7=0, D3=1, D6/D2 qui basculent) pendant N lectures
+-- de la paire ; une lecture sur 1000 ne bascule pas (lecture limite).
+local slow = {}
+for f in faults:gmatch("[^,]+") do
+	local s, c, n = f:match("^g(%d)%.(%d):e(%d+)$")
+	if s then slow[#slow + 1] = { s = tonumber(s), c = tonumber(c), n = tonumber(n), left = 0, cnt = 0, tg = 0 } end
+end
+if #slow > 0 then
+	taps[#taps + 1] = prog:install_write_tap(0x04200000, 0x043fffff, "sw", function(off, data, mask)
+		local s = 3 + bank // 8
+		local pair = (bank % 8) // 2
+		local v = (mask & 0xffff0000 ~= 0) and ((data >> 16) & 0xffff) or (data & 0xffff)
+		for _, e in ipairs(slow) do
+			if e.s == s and e.c // 2 == pair then
+				if v == 0x8080 then e.armed = 4
+				elseif e.armed and e.armed > 0 then
+					e.armed = e.armed - 1
+				end
+			end
+		end
+	end)
+	taps[#taps + 1] = prog:install_read_tap(0x04200000, 0x043fffff, "sr", function(off, data, mask)
+		if guard then return data end
+		local s = 3 + bank // 8
+		local pair = (bank % 8) // 2
+		for _, e in ipairs(slow) do
+			if e.s == s and e.c // 2 == pair and e.left > 0 then
+				e.left = e.left - 1
+				e.cnt = e.cnt + 1
+				if e.cnt % 1000 ~= 0 then e.tg = e.tg ~ 1 end
+				local st = e.tg == 1 and 0x5c or 0x18
+				local sh = (e.c % 2 == 1) and 0 or 8
+				local lanes = (0xff << sh) | (0xff << (sh + 16))
+				data = (data & ~lanes) | (st << sh) | (st << (sh + 16))
+			end
+		end
+		return data
+	end)
+end
 if #gf > 0 then
 	taps[#taps + 1] = prog:install_read_tap(0x04200000, 0x043fffff, "gfault", function(off, data, mask)
 		if guard then return data end
